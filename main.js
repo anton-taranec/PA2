@@ -14,6 +14,7 @@ function deg2rad(angle) {
 function Model(name) {
     this.name = name;
     this.iVertexBuffer = gl.createBuffer();
+    this.iNormalBuffer = gl.createBuffer();
     this.count = 0;
 
     this.BufferData = function (vertices) {
@@ -24,13 +25,24 @@ function Model(name) {
         this.count = vertices.length / 3;
     }
 
+    this.NormalBufferData = function (normals) {
+
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.iNormalBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(normals), gl.STREAM_DRAW);
+
+        this.count = normals.length / 3;
+    }
+
     this.Draw = function () {
 
         gl.bindBuffer(gl.ARRAY_BUFFER, this.iVertexBuffer);
         gl.vertexAttribPointer(shProgram.iAttribVertex, 3, gl.FLOAT, false, 0, 0);
         gl.enableVertexAttribArray(shProgram.iAttribVertex);
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.iNormalBuffer);
+        gl.vertexAttribPointer(shProgram.iAttribNormal, 3, gl.FLOAT, false, 0, 0);
+        gl.enableVertexAttribArray(shProgram.iAttribNormal);
 
-        gl.drawArrays(gl.LINE_STRIP, 0, this.count);
+        gl.drawArrays(gl.TRIANGLE_STRIP, 0, this.count);
     }
 }
 
@@ -43,10 +55,13 @@ function ShaderProgram(name, program) {
 
     // Location of the attribute variable in the shader program.
     this.iAttribVertex = -1;
+    this.iAttribNormal = -1;
     // Location of the uniform specifying a color for the primitive.
     this.iColor = -1;
     // Location of the uniform matrix representing the combined transformation.
     this.iModelViewProjectionMatrix = -1;
+    this.iNormalMatrix = -1;
+    this.lightPosLoc = -1;
 
     this.Use = function () {
         gl.useProgram(this.prog);
@@ -63,7 +78,9 @@ function draw() {
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
     /* Set the values of the projection transformation */
-    let projection = m4.perspective(Math.PI / 8, 1, 8, 12);
+    // let projection = m4.perspective(Math.PI / 8, 1, 8, 12);
+    let para = 3
+    let projection = m4.orthographic(-para, para, -para, para, 0, para * 4);
 
     /* Get the view matrix from the SimpleRotator object.*/
     let modelView = spaceball.getViewMatrix();
@@ -80,40 +97,139 @@ function draw() {
 
     gl.uniformMatrix4fv(shProgram.iModelViewProjectionMatrix, false, modelViewProjection);
 
+    let modelviewInv = new Float32Array(16);
+    let normalmatrix = new Float32Array(16);
+    mat4Invert(modelViewProjection, modelviewInv);
+    mat4Transpose(modelviewInv, normalmatrix);
+
+    gl.uniformMatrix4fv(shProgram.iNormalMatrix, false, normalmatrix);
+
     /* Draw the six faces of a cube, with different colors. */
     gl.uniform4fv(shProgram.iColor, [1, 1, 0, 1]);
-
+    gl.uniform3fv(shProgram.lightPosLoc, [2, 20 * Math.sin(Date.now() * 0.001), 2]);
     surface.Draw();
+}
+function draw_() {
+    gl.clearColor(0, 0, 0, 1);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+    /* Set the values of the projection transformation */
+    // let projection = m4.perspective(Math.PI / 8, 1, 8, 12);
+    let projection = m4.orthographic(-3, 3, -3, 3, 0, 3 * 4);
+
+    /* Get the view matrix from the SimpleRotator object.*/
+    let modelView = spaceball.getViewMatrix();
+
+    let rotateToPointZero = m4.axisRotation([0.707, 0.707, 0], 0.7);
+    let translateToPointZero = m4.translation(0, 0, -10);
+
+    let matAccum0 = m4.multiply(rotateToPointZero, modelView);
+    let matAccum1 = m4.multiply(translateToPointZero, matAccum0);
+
+    /* Multiply the projection matrix times the modelview matrix to give the
+       combined transformation matrix, and send that to the shader program. */
+    let modelViewProjection = m4.multiply(projection, matAccum1);
+
+    gl.uniformMatrix4fv(shProgram.iModelViewProjectionMatrix, false, modelViewProjection);
+
+    let modelviewInv = new Float32Array(16);
+    let normalmatrix = new Float32Array(16);
+    mat4Invert(modelViewProjection, modelviewInv);
+    mat4Transpose(modelviewInv, normalmatrix);
+
+    gl.uniformMatrix4fv(shProgram.iNormalMatrix, false, normalmatrix);
+
+    /* Draw the six faces of a cube, with different colors. */
+    gl.uniform4fv(shProgram.iColor, [1, 1, 0, 1]);
+    gl.uniform3fv(shProgram.lightPosLoc, [2, 20 * Math.sin(Date.now() * 0.001), 2]);
+    surface.Draw();
+    window.requestAnimationFrame(draw_)
 }
 
 function CreateSurfaceData() {
     let vertexList = [];
+
     let R2 = 0.8;
     let R1 = 1.5 * R2;
     let c = 4 * R2;
-    let r = 0;
-    let x = 0;
-    let y = 0;
-    let z = 0;
     let fi = 30;
 
     let a = (-1 / (R1 - R2)) * (((Math.pow((R1 - R2), 2)) / 2) + (Math.pow(c, 2) * Math.pow((Math.tan(deg2rad(fi)))), 2) / (8 * Math.pow((deg2rad(180)), 2)));
     let b = (c / 2) - (c / (deg2rad(360))) * Math.asin(deg2rad((c * Math.tan(deg2rad(fi))) / (deg2rad(360) * a)));
 
-    let param = 2;
     for (let i = 0; i < b + 0.5; i += 0.05) {
         for (let j = 0; j < 360; j += 1) {
-            r = a * (1 - Math.cos(deg2rad((2 * 180 * i / c)))) + R1;
-            x = (r * Math.cos(deg2rad(j))) / param;
-            y = (r * Math.sin(deg2rad(j))) / param;
-            z = i / param;
-            vertexList.push(x, y, z);
+            let v1 = cojugation(i, j, a, c)
+            let v2 = cojugation(i + 0.05, j, a, c)
+            let v3 = cojugation(i, j + 1, a, c)
+            let v4 = cojugation(i + 0.05, j + 1, a, c)
+            vertexList.push(v1.x, v1.y, v1.z);
+            vertexList.push(v2.x, v2.y, v2.z);
+            vertexList.push(v3.x, v3.y, v3.z);
+            vertexList.push(v2.x, v2.y, v2.z);
+            vertexList.push(v4.x, v4.y, v4.z);
+            vertexList.push(v3.x, v3.y, v3.z);
         }
     }
 
     return vertexList;
 }
+function CreateNormData() {
+    let normsList = [];
 
+    let R2 = 0.8;
+    let R1 = 1.5 * R2;
+    let c = 4 * R2;
+    let fi = 30;
+
+    let a = (-1 / (R1 - R2)) * (((Math.pow((R1 - R2), 2)) / 2) + (Math.pow(c, 2) * Math.pow((Math.tan(deg2rad(fi)))), 2) / (8 * Math.pow((deg2rad(180)), 2)));
+    let b = (c / 2) - (c / (deg2rad(360))) * Math.asin(deg2rad((c * Math.tan(deg2rad(fi))) / (deg2rad(360) * a)));
+
+    for (let i = 0; i < b + 0.5; i += 0.05) {
+        for (let j = 0; j < 360; j += 1) {
+            let v1 = cojugation(i, j, a, c)
+            let v2 = cojugation(i + 0.05, j, a, c)
+            let v3 = cojugation(i, j + 1, a, c)
+            let v4 = cojugation(i + 0.05, j + 1, a, c)
+            let v21 = { x: v2.x - v1.x, y: v2.y - v1.y, z: v2.z - v1.z }
+            let v31 = { x: v3.x - v1.x, y: v3.y - v1.y, z: v3.z - v1.z }
+            let n1 = vec3Cross(v21, v31);
+            vec3Normalize(n1);
+            normsList.push(n1.x, n1.y, n1.z);
+            normsList.push(n1.x, n1.y, n1.z);
+            normsList.push(n1.x, n1.y, n1.z);
+            let v42 = { x: v4.x - v2.x, y: v4.y - v2.y, z: v4.z - v2.z };
+            let v32 = { x: v3.x - v2.x, y: v3.y - v2.y, z: v3.z - v2.z };
+            let n2 = vec3Cross(v42, v32);
+            vec3Normalize(n2);
+            normsList.push(n2.x, n2.y, n2.z);
+            normsList.push(n2.x, n2.y, n2.z);
+            normsList.push(n2.x, n2.y, n2.z);
+        }
+    }
+    return normsList;
+}
+
+
+function cojugation(i, j, a, c) {
+    let r = a * (1 - Math.cos(deg2rad((2 * 180 * i / c)))) + (0.8*1.5);
+    let x = 0.75 * r * Math.cos(deg2rad(j));
+    let y = 0.75 * r * Math.sin(deg2rad(j))
+    let z = 0.75 * i
+    return { x: x, y: y, z: z }
+}
+
+function vec3Cross(a, b) {
+    let x = a.y * b.z - b.y * a.z;
+    let y = a.z * b.x - b.z * a.x;
+    let z = a.x * b.y - b.x * a.y;
+    return { x: x, y: y, z: z }
+}
+
+function vec3Normalize(a) {
+    var mag = Math.sqrt(a[0] * a[0] + a[1] * a[1] + a[2] * a[2]);
+    a[0] /= mag; a[1] /= mag; a[2] /= mag;
+}
 
 /* Initialize the WebGL context. Called from init() */
 function initGL() {
@@ -123,11 +239,16 @@ function initGL() {
     shProgram.Use();
 
     shProgram.iAttribVertex = gl.getAttribLocation(prog, "vertex");
+    shProgram.iAttribNormal = gl.getAttribLocation(prog, "normal");
     shProgram.iModelViewProjectionMatrix = gl.getUniformLocation(prog, "ModelViewProjectionMatrix");
+    shProgram.iNormalMatrix = gl.getUniformLocation(prog, "NormalMatrix");
     shProgram.iColor = gl.getUniformLocation(prog, "color");
+    shProgram.lightPosLoc = gl.getUniformLocation(prog, "lightPosition");
 
     surface = new Model('Surface');
     surface.BufferData(CreateSurfaceData());
+    surface.NormalBufferData(CreateNormData());
+
 
     gl.enable(gl.DEPTH_TEST);
 }
@@ -171,14 +292,18 @@ function createProgram(gl, vShader, fShader) {
 function init() {
     let canvas;
     try {
-        canvas = document.getElementById("webglcanvas");
+        let resolution = Math.min(window.innerHeight, window.innerWidth);
+        canvas = document.querySelector('canvas');
         gl = canvas.getContext("webgl");
+        canvas.width = resolution;
+        canvas.height = resolution;
+        gl.viewport(0, 0, resolution, resolution);
         if (!gl) {
             throw "Browser does not support WebGL";
         }
     }
     catch (e) {
-        document.getElementById("canvas-holder").innerHTML =
+        document.querySelector('"canvas-holder"').innerHTML =
             "<p>Sorry, could not get a WebGL graphics context.</p>";
         return;
     }
@@ -193,5 +318,56 @@ function init() {
 
     spaceball = new TrackballRotator(canvas, draw, 0);
 
-    draw();
+    window.requestAnimationFrame(draw_);
+}
+
+function mat4Transpose(a, transposed) {
+    var t = 0;
+    for (var i = 0; i < 4; ++i) {
+        for (var j = 0; j < 4; ++j) {
+            transposed[t++] = a[j * 4 + i];
+        }
+    }
+}
+
+function mat4Invert(m, inverse) {
+    var inv = new Float32Array(16);
+    inv[0] = m[5] * m[10] * m[15] - m[5] * m[11] * m[14] - m[9] * m[6] * m[15] +
+        m[9] * m[7] * m[14] + m[13] * m[6] * m[11] - m[13] * m[7] * m[10];
+    inv[4] = -m[4] * m[10] * m[15] + m[4] * m[11] * m[14] + m[8] * m[6] * m[15] -
+        m[8] * m[7] * m[14] - m[12] * m[6] * m[11] + m[12] * m[7] * m[10];
+    inv[8] = m[4] * m[9] * m[15] - m[4] * m[11] * m[13] - m[8] * m[5] * m[15] +
+        m[8] * m[7] * m[13] + m[12] * m[5] * m[11] - m[12] * m[7] * m[9];
+    inv[12] = -m[4] * m[9] * m[14] + m[4] * m[10] * m[13] + m[8] * m[5] * m[14] -
+        m[8] * m[6] * m[13] - m[12] * m[5] * m[10] + m[12] * m[6] * m[9];
+    inv[1] = -m[1] * m[10] * m[15] + m[1] * m[11] * m[14] + m[9] * m[2] * m[15] -
+        m[9] * m[3] * m[14] - m[13] * m[2] * m[11] + m[13] * m[3] * m[10];
+    inv[5] = m[0] * m[10] * m[15] - m[0] * m[11] * m[14] - m[8] * m[2] * m[15] +
+        m[8] * m[3] * m[14] + m[12] * m[2] * m[11] - m[12] * m[3] * m[10];
+    inv[9] = -m[0] * m[9] * m[15] + m[0] * m[11] * m[13] + m[8] * m[1] * m[15] -
+        m[8] * m[3] * m[13] - m[12] * m[1] * m[11] + m[12] * m[3] * m[9];
+    inv[13] = m[0] * m[9] * m[14] - m[0] * m[10] * m[13] - m[8] * m[1] * m[14] +
+        m[8] * m[2] * m[13] + m[12] * m[1] * m[10] - m[12] * m[2] * m[9];
+    inv[2] = m[1] * m[6] * m[15] - m[1] * m[7] * m[14] - m[5] * m[2] * m[15] +
+        m[5] * m[3] * m[14] + m[13] * m[2] * m[7] - m[13] * m[3] * m[6];
+    inv[6] = -m[0] * m[6] * m[15] + m[0] * m[7] * m[14] + m[4] * m[2] * m[15] -
+        m[4] * m[3] * m[14] - m[12] * m[2] * m[7] + m[12] * m[3] * m[6];
+    inv[10] = m[0] * m[5] * m[15] - m[0] * m[7] * m[13] - m[4] * m[1] * m[15] +
+        m[4] * m[3] * m[13] + m[12] * m[1] * m[7] - m[12] * m[3] * m[5];
+    inv[14] = -m[0] * m[5] * m[14] + m[0] * m[6] * m[13] + m[4] * m[1] * m[14] -
+        m[4] * m[2] * m[13] - m[12] * m[1] * m[6] + m[12] * m[2] * m[5];
+    inv[3] = -m[1] * m[6] * m[11] + m[1] * m[7] * m[10] + m[5] * m[2] * m[11] -
+        m[5] * m[3] * m[10] - m[9] * m[2] * m[7] + m[9] * m[3] * m[6];
+    inv[7] = m[0] * m[6] * m[11] - m[0] * m[7] * m[10] - m[4] * m[2] * m[11] +
+        m[4] * m[3] * m[10] + m[8] * m[2] * m[7] - m[8] * m[3] * m[6];
+    inv[11] = -m[0] * m[5] * m[11] + m[0] * m[7] * m[9] + m[4] * m[1] * m[11] -
+        m[4] * m[3] * m[9] - m[8] * m[1] * m[7] + m[8] * m[3] * m[5];
+    inv[15] = m[0] * m[5] * m[10] - m[0] * m[6] * m[9] - m[4] * m[1] * m[10] +
+        m[4] * m[2] * m[9] + m[8] * m[1] * m[6] - m[8] * m[2] * m[5];
+
+    var det = m[0] * inv[0] + m[1] * inv[4] + m[2] * inv[8] + m[3] * inv[12];
+    if (det == 0) return false;
+    det = 1.0 / det;
+    for (var i = 0; i < 16; i++) inverse[i] = inv[i] * det;
+    return true;
 }
